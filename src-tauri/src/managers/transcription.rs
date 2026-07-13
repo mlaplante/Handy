@@ -676,6 +676,30 @@ impl TranscriptionManager {
                     return Err(anyhow::anyhow!(error_msg));
                 }
                 let locale = resolve_apple_locale(&get_settings(&self.app_handle));
+
+                // Ensure the locale's on-device language assets are ready
+                // *before* the engine is considered loaded. This is a
+                // separate FFI call from transcription (never invoked from
+                // the transcribe dispatch arm) — spec D1 requires asset
+                // install to stay out of the hot/blocking transcribe path,
+                // not that it can't block model *load* (which already runs
+                // off the caller's thread via `initiate_model_load`).
+                if !crate::apple_speech::locale_installed(&locale) {
+                    info!(
+                        "Apple Speech locale '{}' assets not yet installed; installing now",
+                        locale
+                    );
+                    if let Err(e) = crate::apple_speech::install_locale(&locale) {
+                        let error_msg = format!(
+                            "Failed to install Apple Speech language assets for '{}': {}",
+                            locale, e
+                        );
+                        emit_loading_failed(&error_msg);
+                        return Err(anyhow::anyhow!(error_msg));
+                    }
+                    info!("Apple Speech locale '{}' assets installed", locale);
+                }
+
                 LoadedEngine::AppleSpeech { locale }
             }
         };

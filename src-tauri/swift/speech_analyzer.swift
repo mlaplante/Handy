@@ -7,13 +7,16 @@ import AVFoundation
 // Apple Silicon targets whose toolchain supports the real API (mirrors
 // apple_intelligence.swift's real/stub split).
 //
-// Task 1 scope: only `apple_speech_available` and
-// `apple_speech_supported_locales_json` are functionally implemented.
-// `apple_speech_install_locale` is still an error-returning placeholder
-// (real body lands in Task 6). `apple_speech_transcribe` is implemented for
-// real in Task 4 using the manual AnalyzerInput/AsyncStream buffer path
-// confirmed against the SDK (see the plan's Task 0 "FULLY CONFIRMED" block) —
-// SpeechAnalyzer(inputAudioFile:) is NOT used; it crashes with SIGTRAP.
+// `apple_speech_transcribe` is implemented using the manual
+// AnalyzerInput/AsyncStream buffer path confirmed against the SDK (see the
+// plan's Task 0 "FULLY CONFIRMED" block) — SpeechAnalyzer(inputAudioFile:) is
+// NOT used; it crashes with SIGTRAP.
+//
+// `apple_speech_locale_installed`/`apple_speech_install_locale` are backed by
+// `AssetInventory.assetInstallationRequest(supporting:)` (Task 0's confirmed
+// API): a `nil` request means the locale's assets are already available
+// (spike finding: real machines report `.supported`, not `.installed`, once
+// usable — so "request is nil" is the readiness signal, not `.installed`).
 
 private typealias ResultPointer = UnsafeMutablePointer<AppleSpeechResult>
 
@@ -139,14 +142,86 @@ public func apple_speech_available() -> Int32 {
 
 @_cdecl("apple_speech_locale_installed")
 public func apple_speech_locale_installed(_ lang: UnsafePointer<CChar>?) -> Int32 {
-    // Real locale-installed check lands in Task 6 (AssetInventory.status).
-    return 0
+    guard #available(macOS 26.0, *) else { return 0 }
+    guard let lang = lang else { return 0 }
+    let localeIdentifier = String(cString: lang)
+
+    let semaphore = DispatchSemaphore(value: 0)
+
+    final class ResultBox: @unchecked Sendable {
+        var installed = false
+    }
+    let box = ResultBox()
+
+    Task.detached(priority: .userInitiated) {
+        defer { semaphore.signal() }
+        do {
+            let locale = Locale(identifier: localeIdentifier)
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: [],
+                attributeOptions: []
+            )
+            // nil ⇒ nothing to install ⇒ the locale is already usable (Task 0
+            // spike finding: don't require AssetInventory.status == .installed).
+            let request = try await AssetInventory.assetInstallationRequest(
+                supporting: [transcriber])
+            box.installed = (request == nil)
+        } catch {
+            box.installed = false
+        }
+    }
+    semaphore.wait()
+
+    return box.installed ? 1 : 0
 }
 
 @_cdecl("apple_speech_install_locale")
 public func apple_speech_install_locale(_ lang: UnsafePointer<CChar>?) -> UnsafeMutablePointer<AppleSpeechResult>? {
-    // Placeholder: real AssetInventory-backed install lands in Task 6.
-    return makeErrorResult("not implemented yet")
+    guard #available(macOS 26.0, *) else {
+        return makeErrorResult("Apple Speech requires macOS 26 or newer.")
+    }
+    guard let lang = lang else {
+        return makeErrorResult("Apple Speech locale install received null arguments.")
+    }
+    let localeIdentifier = String(cString: lang)
+
+    let semaphore = DispatchSemaphore(value: 0)
+
+    final class ResultBox: @unchecked Sendable {
+        var error: String?
+    }
+    let box = ResultBox()
+
+    Task.detached(priority: .userInitiated) {
+        defer { semaphore.signal() }
+        do {
+            let locale = Locale(identifier: localeIdentifier)
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: [],
+                attributeOptions: []
+            )
+            if let request = try await AssetInventory.assetInstallationRequest(
+                supporting: [transcriber])
+            {
+                // Best-effort: a simple blocking install with no per-percent
+                // progress callback (per-plan, progress plumbing is optional
+                // and not worth the C function-pointer complexity here).
+                try await request.downloadAndInstall()
+            }
+        } catch {
+            box.error = "Apple Speech asset install failed: \(error)"
+        }
+    }
+    semaphore.wait()
+
+    if let error = box.error {
+        return makeErrorResult(error)
+    }
+    return makeResult(text: "")
 }
 
 @_cdecl("apple_speech_transcribe")
