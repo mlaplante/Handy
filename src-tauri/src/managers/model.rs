@@ -1122,18 +1122,24 @@ impl ModelManager {
         list
     }
 
-    /// Seed the bundled catalog ([`crate::catalog::CATALOG`]) into the registry,
-    /// inserting each model whose id isn't already present (additive).
+    /// Seed the bundled catalog ([`crate::catalog::apple_augmented_catalog`])
+    /// into the registry, inserting each model whose id isn't already present
+    /// (additive).
     ///
     /// Catalog (`.gguf`, `HuggingFace`) and legacy (`.bin`/ONNX, `Url`) entries
     /// stay SEPARATE — different files, ids, and runtimes. Nothing is merged or
     /// removed; the UI just hides not-on-disk `Url` entries to deprecate legacy
     /// downloads, while already-downloaded ones stay runnable. Runs before the
     /// on-disk scans so a cached model dedups onto its catalog entry.
+    ///
+    /// `apple_augmented_catalog()` appends the availability-gated "Built-in
+    /// (Apple)" descriptor (`ModelSource::System`) to the bundled catalog when
+    /// `apple_speech::available()`, so the OS-provided backend is seeded
+    /// through this same additive path — no separate registration needed.
     fn seed_catalog_models(available_models: &mut HashMap<String, ModelInfo>) {
         use std::collections::hash_map::Entry;
         let mut added = 0usize;
-        for desc in crate::catalog::CATALOG.iter() {
+        for desc in crate::catalog::apple_augmented_catalog().into_iter() {
             if let Entry::Vacant(slot) = available_models.entry(desc.id.clone()) {
                 slot.insert(desc.to_model_info(&DiskStatus::default()));
                 added += 1;
