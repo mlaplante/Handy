@@ -92,7 +92,7 @@ private func convert(
     let status = converter.convert(to: outputBuffer, error: &conversionError) {
         _, outStatus in
         if hasSuppliedInput {
-            outStatus.pointee = .noDataNow
+            outStatus.pointee = .endOfStream
             return nil
         }
         hasSuppliedInput = true
@@ -161,6 +161,9 @@ public func apple_speech_transcribe(
     guard let samples = samples, let lang = lang else {
         return makeErrorResult("Apple Speech transcription received null arguments.")
     }
+    if len == 0 {
+        return makeResult(text: "")
+    }
 
     let localeIdentifier = String(cString: lang)
     let input = Array(UnsafeBufferPointer(start: samples, count: len))
@@ -193,7 +196,8 @@ public func apple_speech_transcribe(
                 let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
                     compatibleWith: modules)
             else {
-                box.error = "Apple Speech could not determine a compatible audio format."
+                box.error =
+                    "Apple Speech could not determine a compatible audio format for locale '\(localeIdentifier)'."
                 return
             }
 
