@@ -682,8 +682,13 @@ impl TranscriptionManager {
                 // separate FFI call from transcription (never invoked from
                 // the transcribe dispatch arm) — spec D1 requires asset
                 // install to stay out of the hot/blocking transcribe path,
-                // not that it can't block model *load* (which already runs
-                // off the caller's thread via `initiate_model_load`).
+                // not that it can't block model *load*. That's fine because
+                // load_model always runs off the caller's thread — either
+                // via `initiate_model_load`'s background thread, or (for the
+                // set_active_model → switch_active_model path in
+                // commands/models.rs) via the tokio async runtime — and the
+                // FFI call itself now has a bounded timeout so it can't hang
+                // forever either way.
                 if !crate::apple_speech::locale_installed(&locale) {
                     info!(
                         "Apple Speech locale '{}' assets not yet installed; installing now",

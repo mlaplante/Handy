@@ -172,7 +172,14 @@ public func apple_speech_locale_installed(_ lang: UnsafePointer<CChar>?) -> Int3
             box.installed = false
         }
     }
-    semaphore.wait()
+    // Fast metadata query, but still bounded: if it stalls, treat "couldn't
+    // determine" as "not installed" (0) so the caller falls through to the
+    // install path rather than blocking the model-load future forever. Do
+    // NOT read `box` on timeout — the detached Task may still be writing to
+    // it; the abandoned Task finishes harmlessly in the background.
+    if semaphore.wait(timeout: .now() + 30) == .timedOut {
+        return 0
+    }
 
     return box.installed ? 1 : 0
 }
@@ -216,7 +223,15 @@ public func apple_speech_install_locale(_ lang: UnsafePointer<CChar>?) -> Unsafe
             box.error = "Apple Speech asset install failed: \(error)"
         }
     }
-    semaphore.wait()
+    // Generous bound for a real download. On timeout, do NOT read `box` —
+    // the detached Task may still be mutating it — just return a fresh
+    // error result and let the abandoned Task finish (or keep running)
+    // harmlessly in the background. This guarantees `load_model` always
+    // resolves instead of hanging forever and wedging the load-in-progress
+    // guard (see commands/models.rs try_start_loading).
+    if semaphore.wait(timeout: .now() + 300) == .timedOut {
+        return makeErrorResult("Apple Speech asset install timed out")
+    }
 
     if let error = box.error {
         return makeErrorResult(error)
