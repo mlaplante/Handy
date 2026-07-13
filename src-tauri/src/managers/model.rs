@@ -35,6 +35,9 @@ pub enum EngineType {
     GigaAM,
     Canary,
     Cohere,
+    /// Apple SpeechAnalyzer/SpeechTranscriber (macOS 26+), reached via the
+    /// `apple_speech` FFI bridge. No downloadable weights — the OS holds them.
+    AppleSpeech,
 }
 
 /// Where a model comes from and how Handy obtains it — the routing discriminant
@@ -54,6 +57,10 @@ pub enum ModelSource {
     /// Already present on disk — a user-provided custom model, or one discovered
     /// in a shared cache. Nothing to download.
     Local,
+    /// OS-provided backend with nothing to fetch over HTTP. "Obtainable" is
+    /// decided at runtime by the backend's availability check; per-language
+    /// assets (if any) are installed via the backend, not downloaded here.
+    System,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1841,6 +1848,16 @@ impl ModelManager {
             }
             ModelSource::Local => {
                 return Err(anyhow::anyhow!("No download source for model"));
+            }
+            ModelSource::System => {
+                // OS-provided backend (e.g. Apple Speech): nothing to fetch over
+                // HTTP or the HF cache. Per-language asset install is a separate,
+                // backend-specific path (`apple_speech::install_locale`), not yet
+                // wired through this ModelManager download flow — surface a clear
+                // error instead of silently no-op-ing or hitting a URL.
+                return Err(anyhow::anyhow!(
+                    "No download source for model; OS-provided models install language assets separately"
+                ));
             }
         };
         let model_path = self.models_dir.join(&model_info.filename);

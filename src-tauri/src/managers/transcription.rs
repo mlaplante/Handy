@@ -168,6 +168,12 @@ enum LoadedEngine {
     GigaAM(GigaAMModel),
     Canary(CanaryModel),
     Cohere(CohereModel),
+    /// Apple SpeechAnalyzer (macOS 26+) via the `apple_speech` FFI bridge. Zero
+    /// on-heap model state on the Rust side — the OS owns the model — so this
+    /// only carries the resolved BCP-47 locale to pass on each transcribe call.
+    AppleSpeech {
+        locale: String,
+    },
 }
 
 /// RAII guard that clears the `is_loading` flag and notifies waiters on drop.
@@ -659,6 +665,19 @@ impl TranscriptionManager {
                 })?;
                 LoadedEngine::Cohere(engine)
             }
+            EngineType::AppleSpeech => {
+                // No file/session I/O: the OS owns the model. Just assert the
+                // backend is actually usable on this machine and resolve which
+                // locale to pass on each transcribe call.
+                if !crate::apple_speech::available() {
+                    let error_msg =
+                        "Apple Speech backend is not available on this system".to_string();
+                    emit_loading_failed(&error_msg);
+                    return Err(anyhow::anyhow!(error_msg));
+                }
+                let locale = resolve_apple_locale(&get_settings(&self.app_handle));
+                LoadedEngine::AppleSpeech { locale }
+            }
         };
 
         // Update the current engine and model ID
@@ -733,12 +752,14 @@ impl TranscriptionManager {
     /// diagnostics (e.g. confirming `--device-index` actually bound a GPU rather
     /// than falling back to CPU/auto). transcribe-cpp (whisper-family) reports
     /// its real backend string; ONNX engines report "onnx"; `None` when no
-    /// model is loaded.
+    /// model is loaded. `AppleSpeech` isn't ONNX or transcribe-cpp, so it gets
+    /// its own label rather than falling into the ONNX-engines catch-all.
     pub fn current_backend(&self) -> Option<String> {
         match self.lock_engine().as_ref() {
             Some(LoadedEngine::TranscribeCpp(session)) => {
                 Some(session.model().backend().to_string())
             }
+            Some(LoadedEngine::AppleSpeech { .. }) => Some("apple-speech".to_string()),
             Some(_) => Some("onnx".to_string()),
             None => None,
         }
@@ -1337,6 +1358,10 @@ impl TranscriptionManager {
                             .map(|r| r.text)
                             .map_err(|e| anyhow::anyhow!("Cohere transcription failed: {}", e))
                     }
+                    LoadedEngine::AppleSpeech { locale } => {
+                        crate::apple_speech::transcribe(&audio, locale)
+                            .map_err(|e| anyhow::anyhow!("Apple Speech transcription failed: {e}"))
+                    }
                 }
             }));
 
@@ -1562,6 +1587,42 @@ fn effective_language_for_model(
             info.supports_language_detection,
         ),
         None => settings.selected_language.clone(),
+    }
+}
+
+/// Resolve the app's selected-language *intent* (`settings.selected_language`
+/// — usually a bare Whisper-style code like `"en"`, occasionally `"auto"` or a
+/// script-qualified tag like `"zh-Hans"`) into a concrete BCP-47 locale for
+/// Apple's SpeechTranscriber (e.g. `"en-US"`).
+///
+/// `selected_language` is not itself BCP-47, so this is a best-effort mapping,
+/// not a lookup table: prefer an exact match against
+/// [`crate::apple_speech::supported_locales`] on the language's base subtag
+/// (covers the common case, e.g. `"en"` / `"en-US"` both resolving to whatever
+/// Apple actually advertises as its English locale); otherwise pass the value
+/// through unchanged if it already looks like BCP-47 (contains a region/script
+/// subtag); otherwise default to `"en-US"` rather than handing Apple a bare
+/// ISO-639-1 code it may not resolve. Empty or `"auto"` also default to
+/// `"en-US"`, since Apple's API wants one concrete locale, not an auto-detect
+/// sentinel.
+fn resolve_apple_locale(settings: &AppSettings) -> String {
+    let lang = settings.selected_language.trim();
+    if lang.is_empty() || lang == "auto" {
+        return "en-US".to_string();
+    }
+
+    let base = lang.split('-').next().unwrap_or(lang);
+    if let Some(locale) = crate::apple_speech::supported_locales()
+        .into_iter()
+        .find(|l| l.split('-').next() == Some(base))
+    {
+        return locale;
+    }
+
+    if lang.contains('-') {
+        lang.to_string()
+    } else {
+        "en-US".to_string()
     }
 }
 
@@ -1893,6 +1954,35 @@ mod tests {
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_apple_locale_defaults_to_en_us() {
+        let settings = AppSettings {
+            selected_language: "auto".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "en-US");
+
+        let settings = AppSettings {
+            selected_language: String::new(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "en-US");
+    }
+
+    #[test]
+    fn resolve_apple_locale_passes_through_an_explicit_bcp47_value() {
+        // "xx" isn't a real language subtag, so this can never match anything
+        // in `apple_speech::supported_locales()` (real or stub) — deterministic
+        // across every environment, unlike a real language whose position in
+        // the OS's locale list isn't guaranteed. Exercises the passthrough
+        // branch specifically (already-BCP-47, no Apple-locale match).
+        let settings = AppSettings {
+            selected_language: "xx-YY".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "xx-YY");
     }
 
     #[test]

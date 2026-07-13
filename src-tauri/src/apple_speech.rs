@@ -18,7 +18,10 @@ mod imp {
 
     extern "C" {
         fn apple_speech_available() -> c_int;
+        // wired up in Task 6 (locale asset install via the model-download UI)
+        #[allow(dead_code)]
         fn apple_speech_locale_installed(lang: *const c_char) -> c_int;
+        #[allow(dead_code)]
         fn apple_speech_install_locale(lang: *const c_char) -> *mut AppleSpeechResult;
         fn apple_speech_transcribe(
             samples: *const c_float,
@@ -72,6 +75,8 @@ mod imp {
         }
     }
 
+    // wired up in Task 6 (locale asset install via the model-download UI)
+    #[allow(dead_code)]
     pub fn locale_installed(lang: &str) -> bool {
         let c = match CString::new(lang) {
             Ok(c) => c,
@@ -80,6 +85,8 @@ mod imp {
         unsafe { apple_speech_locale_installed(c.as_ptr()) == 1 }
     }
 
+    // wired up in Task 6 (locale asset install via the model-download UI)
+    #[allow(dead_code)]
     pub fn install_locale(lang: &str) -> Result<(), String> {
         let c = CString::new(lang).map_err(|e| e.to_string())?;
         take_result(unsafe { apple_speech_install_locale(c.as_ptr()) }).map(|_| ())
@@ -99,9 +106,13 @@ mod imp {
     pub fn supported_locales() -> Vec<String> {
         Vec::new()
     }
+    // wired up in Task 6 (locale asset install via the model-download UI)
+    #[allow(dead_code)]
     pub fn locale_installed(_lang: &str) -> bool {
         false
     }
+    // wired up in Task 6 (locale asset install via the model-download UI)
+    #[allow(dead_code)]
     pub fn install_locale(_lang: &str) -> Result<(), String> {
         Err("Apple Speech unavailable on this platform".into())
     }
