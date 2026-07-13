@@ -1596,8 +1596,12 @@ fn effective_language_for_model(
 /// Apple's SpeechTranscriber (e.g. `"en-US"`).
 ///
 /// `selected_language` is not itself BCP-47, so this is a best-effort mapping,
-/// not a lookup table: prefer an exact match against
-/// [`crate::apple_speech::supported_locales`] on the language's base subtag
+/// not a lookup table. All comparisons are case-insensitive. If the input is
+/// script/region-qualified (contains a `-`, e.g. `"zh-Hans"`), first try an
+/// exact full-tag match against [`crate::apple_speech::supported_locales`] so
+/// distinct scripts/regions (e.g. `"zh-Hans"` vs `"zh-Hant"`) don't collapse
+/// onto whichever locale Apple happens to list first; otherwise (or if no
+/// full-tag match exists) fall back to matching on the language's base subtag
 /// (covers the common case, e.g. `"en"` / `"en-US"` both resolving to whatever
 /// Apple actually advertises as its English locale); otherwise pass the value
 /// through unchanged if it already looks like BCP-47 (contains a region/script
@@ -1607,14 +1611,28 @@ fn effective_language_for_model(
 /// sentinel.
 fn resolve_apple_locale(settings: &AppSettings) -> String {
     let lang = settings.selected_language.trim();
-    if lang.is_empty() || lang == "auto" {
+    if lang.is_empty() || lang.eq_ignore_ascii_case("auto") {
         return "en-US".to_string();
     }
 
-    let base = lang.split('-').next().unwrap_or(lang);
-    if let Some(locale) = crate::apple_speech::supported_locales()
+    let lang_lower = lang.to_lowercase();
+    let is_script_qualified = lang_lower.contains('-');
+    let locales = crate::apple_speech::supported_locales();
+
+    // Script/region-qualified input (e.g. "zh-Hans" vs "zh-Hant"): try an
+    // exact full-tag match first, case-insensitively, so we don't collapse
+    // onto whichever "zh-*" locale Apple happens to list first (order isn't
+    // guaranteed) and silently return the wrong script/region.
+    if is_script_qualified {
+        if let Some(locale) = locales.iter().find(|l| l.to_lowercase() == lang_lower) {
+            return locale.clone();
+        }
+    }
+
+    let base = lang_lower.split('-').next().unwrap_or(&lang_lower);
+    if let Some(locale) = locales
         .into_iter()
-        .find(|l| l.split('-').next() == Some(base))
+        .find(|l| l.split('-').next().map(str::to_lowercase).as_deref() == Some(base))
     {
         return locale;
     }
@@ -1983,6 +2001,48 @@ mod tests {
             ..AppSettings::default()
         };
         assert_eq!(resolve_apple_locale(&settings), "xx-YY");
+    }
+
+    #[test]
+    fn resolve_apple_locale_defaults_are_case_insensitive() {
+        // "AUTO"/"Auto" must hit the same early-return default branch as
+        // "auto" — deterministic regardless of `supported_locales()` contents
+        // since it never reaches locale matching.
+        let settings = AppSettings {
+            selected_language: "AUTO".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "en-US");
+
+        let settings = AppSettings {
+            selected_language: "Auto".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "en-US");
+    }
+
+    #[test]
+    fn resolve_apple_locale_preserves_script_qualified_value_when_unmatched() {
+        // "qq-Qaaa" isn't a real language/script combination, so it can never
+        // match `apple_speech::supported_locales()` (real or stub) on the full
+        // tag or the base subtag — deterministic across every environment.
+        // Proves the new script-aware full-tag-match-first branch doesn't
+        // mangle a script-qualified value it can't resolve; it should still
+        // fall through to BCP-47 passthrough like any other unmatched
+        // already-BCP-47 value.
+        let settings = AppSettings {
+            selected_language: "qq-Qaaa".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "qq-Qaaa");
+
+        // Mixed-case variant of the same synthetic tag: case must not affect
+        // whether (or how) the value passes through when unmatched.
+        let settings = AppSettings {
+            selected_language: "QQ-qaaa".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "QQ-qaaa");
     }
 
     #[test]
