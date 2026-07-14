@@ -110,7 +110,48 @@ mod imp {
     }
 }
 
-pub use imp::*;
+pub use imp::{available, install_locale, locale_installed, supported_locales};
+
+/// Transcribe audio via the Apple Speech engine. Wraps `imp::transcribe` and
+/// capitalizes sentence starts on the success path: `SpeechTranscriber`
+/// punctuates well but leaves sentence starts lowercase (its
+/// `TranscriptionOption` set has no casing knob), so every Apple transcript
+/// gets this cleanup. Other engines' output is untouched.
+pub fn transcribe(samples: &[f32], lang: &str) -> Result<String, String> {
+    imp::transcribe(samples, lang).map(|text| capitalize_sentence_starts(&text))
+}
+
+/// SpeechTranscriber punctuates well but leaves sentence starts lowercase
+/// (its `TranscriptionOption` set has no casing knob), so uppercase the first
+/// letter of the text and of each sentence after `.`, `!`, `?`, or `…`.
+/// A no-op for uncased scripts and for already-capitalized letters.
+fn capitalize_sentence_starts(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut at_sentence_start = true;
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if at_sentence_start && c.is_alphabetic() {
+            result.extend(c.to_uppercase());
+            at_sentence_start = false;
+            continue;
+        }
+        // Punctuation counts as a sentence end only when followed by
+        // whitespace (or end of text) so decimals like "3.5" stay intact.
+        // Quotes and brackets pass through without consuming the sentence
+        // start; anything else (digits, mid-sentence letters) consumes it.
+        if matches!(c, '.' | '!' | '?' | '…')
+            && chars.peek().is_none_or(|next| next.is_whitespace())
+        {
+            at_sentence_start = true;
+        } else if !c.is_whitespace() && !matches!(c, '"' | '\'' | '“' | '”' | '(' | '[') {
+            at_sentence_start = false;
+        }
+        result.push(c);
+    }
+
+    result
+}
 
 #[cfg(test)]
 mod tests {
@@ -130,5 +171,49 @@ mod tests {
     #[test]
     fn supported_locales_is_total() {
         let _ = supported_locales(); // must not panic; empty is valid
+    }
+
+    #[test]
+    fn capitalizes_first_letter_and_after_sentence_punctuation() {
+        assert_eq!(
+            capitalize_sentence_starts("hello there. how are you? great! okay"),
+            "Hello there. How are you? Great! Okay"
+        );
+    }
+
+    #[test]
+    fn ignores_decimals_and_leaves_numbers_alone() {
+        assert_eq!(
+            capitalize_sentence_starts("it costs 3.5 dollars. 6 people paid"),
+            "It costs 3.5 dollars. 6 people paid"
+        );
+    }
+
+    #[test]
+    fn capitalizes_through_opening_quotes() {
+        assert_eq!(
+            capitalize_sentence_starts("she said. \"hello world\""),
+            "She said. \"Hello world\""
+        );
+    }
+
+    #[test]
+    fn treats_ellipsis_as_sentence_end() {
+        // `…` is in the sentence-end matcher alongside `.!?` — SpeechTranscriber
+        // emits it for trailing-off speech. Pinned separately because it's the
+        // one member of that set a rewrite of the matcher would most plausibly
+        // drop (it's easy to forget it's a single char, not three dots).
+        assert_eq!(
+            capitalize_sentence_starts("well… maybe tomorrow"),
+            "Well… Maybe tomorrow"
+        );
+    }
+
+    #[test]
+    fn capitalizes_the_smoke_test_transcript() {
+        assert_eq!(
+            capitalize_sentence_starts("the quick brown fox. hello world"),
+            "The quick brown fox. Hello world"
+        );
     }
 }
