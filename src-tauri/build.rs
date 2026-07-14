@@ -518,6 +518,9 @@ fn build_apple_speech_bridge() {
     println!("cargo:rerun-if-changed={REAL_SWIFT_FILE}");
     println!("cargo:rerun-if-changed={STUB_SWIFT_FILE}");
     println!("cargo:rerun-if-changed={BRIDGE_HEADER}");
+    // Without this, toggling the stub flag between builds silently reuses the
+    // cached bridge (real vs stub) instead of rebuilding.
+    println!("cargo:rerun-if-env-changed=HANDY_FORCE_SPEECH_STUB");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let object_path = out_dir.join("speech_analyzer.o");
