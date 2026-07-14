@@ -43,6 +43,56 @@ private func resolveSupportedLocale(_ requested: String) async -> Locale? {
     await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: requested))
 }
 
+/// Compares an already-reserved locale against the resolved, selected locale
+/// using Apple's BCP-47 identifiers. Falls back to
+/// `SpeechTranscriber.supportedLocale(equivalentTo:)` equivalence because
+/// `AssetInventory.reservedLocales` may hand back a canonical variant that
+/// doesn't literally string-match the identifier the reservation was made
+/// under.
+@available(macOS 26.0, *)
+private func reservationMatches(_ reservedLocale: Locale, _ selectedLocale: Locale) async -> Bool {
+    let selectedIdentifier = selectedLocale.identifier(.bcp47)
+    if reservedLocale.identifier(.bcp47) == selectedIdentifier {
+        return true
+    }
+    return await SpeechTranscriber.supportedLocale(equivalentTo: reservedLocale)?
+        .identifier(.bcp47) == selectedIdentifier
+}
+
+/// macOS caps how many locales an app can hold reserved at once
+/// (`AssetInventory.maximumReservedLocales`). Cycling through many languages
+/// over the app's lifetime can hit that cap, which makes
+/// `AssetInventory.assetInstallationRequest(supporting:)` throw. If the
+/// locale we're about to install isn't already reserved and the cap is
+/// reached, release other (non-selected) reservations until there's room.
+/// Spare reservations that aren't in the way are left alone to avoid
+/// needless re-download churn later.
+@available(macOS 26.0, *)
+private func makeRoomForReservation(of locale: Locale) async {
+    let selectedIdentifier = locale.identifier(.bcp47)
+    let reservedLocales = await AssetInventory.reservedLocales
+
+    var selectedIsReserved = false
+    for reservedLocale in reservedLocales {
+        if await reservationMatches(reservedLocale, locale) {
+            selectedIsReserved = true
+            break
+        }
+    }
+
+    guard !selectedIsReserved, reservedLocales.count >= AssetInventory.maximumReservedLocales else {
+        return
+    }
+
+    var reservationCount = reservedLocales.count
+    for reservedLocale in reservedLocales where reservedLocale.identifier(.bcp47) != selectedIdentifier {
+        guard reservationCount >= AssetInventory.maximumReservedLocales else { break }
+        if await AssetInventory.release(reservedLocale: reservedLocale) {
+            reservationCount -= 1
+        }
+    }
+}
+
 /// Handy's internal audio buffer is 16 kHz mono Float32 (see
 /// `src-tauri/src/audio_toolkit/constants.rs::WHISPER_SAMPLE_RATE` and the
 /// mono downmix in `audio_toolkit/audio/recorder.rs`). This builds the
@@ -233,6 +283,9 @@ public func apple_speech_install_locale(_ lang: UnsafePointer<CChar>?) -> Unsafe
                 reportingOptions: [],
                 attributeOptions: []
             )
+            // Ensure a reservation slot is available before asking the OS to
+            // reserve/install this locale's assets (see makeRoomForReservation).
+            await makeRoomForReservation(of: locale)
             if let request = try await AssetInventory.assetInstallationRequest(
                 supporting: [transcriber])
             {
