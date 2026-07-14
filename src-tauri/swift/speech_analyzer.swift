@@ -32,6 +32,17 @@ private func makeResult(text: String) -> ResultPointer {
     return ptr
 }
 
+/// Resolves a requested BCP-47 identifier (Handy's `resolve_apple_locale`
+/// intent, e.g. `"en"`, `"fr"`, `"zh-Hant"`) to Apple's canonical supported
+/// `Locale` via `SpeechTranscriber.supportedLocale(equivalentTo:)`. This
+/// replaces the hand-rolled base-subtag/script/case matching that used to
+/// live in Rust — Apple owns locale equivalence now. Returns `nil` if the
+/// requested identifier has no supported equivalent.
+@available(macOS 26.0, *)
+private func resolveSupportedLocale(_ requested: String) async -> Locale? {
+    await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: requested))
+}
+
 /// Handy's internal audio buffer is 16 kHz mono Float32 (see
 /// `src-tauri/src/audio_toolkit/constants.rs::WHISPER_SAMPLE_RATE` and the
 /// mono downmix in `audio_toolkit/audio/recorder.rs`). This builds the
@@ -137,7 +148,10 @@ private func runAndCollect(
 
 @_cdecl("apple_speech_available")
 public func apple_speech_available() -> Int32 {
-    if #available(macOS 26.0, *) { return 1 } else { return 0 }
+    if #available(macOS 26.0, *) {
+        return SpeechTranscriber.isAvailable ? 1 : 0
+    }
+    return 0
 }
 
 @_cdecl("apple_speech_locale_installed")
@@ -156,7 +170,12 @@ public func apple_speech_locale_installed(_ lang: UnsafePointer<CChar>?) -> Int3
     Task.detached(priority: .userInitiated) {
         defer { semaphore.signal() }
         do {
-            let locale = Locale(identifier: localeIdentifier)
+            // Resolve to Apple's canonical supported locale first; an
+            // unsupported requested locale is never "installed".
+            guard let locale = await resolveSupportedLocale(localeIdentifier) else {
+                box.installed = false
+                return
+            }
             let transcriber = SpeechTranscriber(
                 locale: locale,
                 transcriptionOptions: [],
@@ -204,7 +223,10 @@ public func apple_speech_install_locale(_ lang: UnsafePointer<CChar>?) -> Unsafe
     Task.detached(priority: .userInitiated) {
         defer { semaphore.signal() }
         do {
-            let locale = Locale(identifier: localeIdentifier)
+            guard let locale = await resolveSupportedLocale(localeIdentifier) else {
+                box.error = "Locale '\(localeIdentifier)' is not supported by Apple Speech"
+                return
+            }
             let transcriber = SpeechTranscriber(
                 locale: locale,
                 transcriptionOptions: [],
@@ -273,7 +295,10 @@ public func apple_speech_transcribe(
     Task.detached(priority: .userInitiated) {
         defer { semaphore.signal() }
         do {
-            let locale = Locale(identifier: localeIdentifier)
+            guard let locale = await resolveSupportedLocale(localeIdentifier) else {
+                box.error = "Locale '\(localeIdentifier)' is not supported by Apple Speech"
+                return
+            }
             let transcriber = SpeechTranscriber(
                 locale: locale,
                 transcriptionOptions: [],

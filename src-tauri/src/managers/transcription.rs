@@ -1621,56 +1621,23 @@ fn effective_language_for_model(
 
 /// Resolve the app's selected-language *intent* (`settings.selected_language`
 /// — usually a bare Whisper-style code like `"en"`, occasionally `"auto"` or a
-/// script-qualified tag like `"zh-Hans"`) into a concrete BCP-47 locale for
-/// Apple's SpeechTranscriber (e.g. `"en-US"`).
+/// script-qualified tag like `"zh-Hans"`) into the identifier passed to
+/// Apple's SpeechTranscriber.
 ///
-/// `selected_language` is not itself BCP-47, so this is a best-effort mapping,
-/// not a lookup table. All comparisons are case-insensitive. If the input is
-/// script/region-qualified (contains a `-`, e.g. `"zh-Hans"`), first try an
-/// exact full-tag match against [`crate::apple_speech::supported_locales`] so
-/// distinct scripts/regions (e.g. `"zh-Hans"` vs `"zh-Hant"`) don't collapse
-/// onto whichever locale Apple happens to list first; otherwise (or if no
-/// full-tag match exists) fall back to matching on the language's base subtag
-/// (covers the common case, e.g. `"en"` / `"en-US"` both resolving to whatever
-/// Apple actually advertises as its English locale); otherwise pass the value
-/// through unchanged if it already looks like BCP-47 (contains a region/script
-/// subtag); otherwise default to `"en-US"` rather than handing Apple a bare
-/// ISO-639-1 code it may not resolve. Empty or `"auto"` also default to
-/// `"en-US"`, since Apple's API wants one concrete locale, not an auto-detect
-/// sentinel.
+/// Handy only owns the "auto"/empty concept here (mapped to `"en-US"`, since
+/// Apple's API wants one concrete locale, not an auto-detect sentinel); any
+/// concrete value is passed through unchanged. Apple itself now owns locale
+/// equivalence (base-subtag/script/case matching) via
+/// `SpeechTranscriber.supportedLocale(equivalentTo:)` on the Swift side (see
+/// `speech_analyzer.swift::resolveSupportedLocale`), so a value that isn't a
+/// supported locale surfaces as a clean "not supported" error there rather
+/// than silently falling back to English here.
 fn resolve_apple_locale(settings: &AppSettings) -> String {
     let lang = settings.selected_language.trim();
     if lang.is_empty() || lang.eq_ignore_ascii_case("auto") {
         return "en-US".to_string();
     }
-
-    let lang_lower = lang.to_lowercase();
-    let is_script_qualified = lang_lower.contains('-');
-    let locales = crate::apple_speech::supported_locales();
-
-    // Script/region-qualified input (e.g. "zh-Hans" vs "zh-Hant"): try an
-    // exact full-tag match first, case-insensitively, so we don't collapse
-    // onto whichever "zh-*" locale Apple happens to list first (order isn't
-    // guaranteed) and silently return the wrong script/region.
-    if is_script_qualified {
-        if let Some(locale) = locales.iter().find(|l| l.to_lowercase() == lang_lower) {
-            return locale.clone();
-        }
-    }
-
-    let base = lang_lower.split('-').next().unwrap_or(&lang_lower);
-    if let Some(locale) = locales
-        .into_iter()
-        .find(|l| l.split('-').next().map(str::to_lowercase).as_deref() == Some(base))
-    {
-        return locale;
-    }
-
-    if lang.contains('-') {
-        lang.to_string()
-    } else {
-        "en-US".to_string()
-    }
+    lang.to_string()
 }
 
 struct TranscribeCppRunPlan {
@@ -2019,24 +1986,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_apple_locale_passes_through_an_explicit_bcp47_value() {
-        // "xx" isn't a real language subtag, so this can never match anything
-        // in `apple_speech::supported_locales()` (real or stub) — deterministic
-        // across every environment, unlike a real language whose position in
-        // the OS's locale list isn't guaranteed. Exercises the passthrough
-        // branch specifically (already-BCP-47, no Apple-locale match).
-        let settings = AppSettings {
-            selected_language: "xx-YY".to_string(),
-            ..AppSettings::default()
-        };
-        assert_eq!(resolve_apple_locale(&settings), "xx-YY");
-    }
-
-    #[test]
     fn resolve_apple_locale_defaults_are_case_insensitive() {
         // "AUTO"/"Auto" must hit the same early-return default branch as
-        // "auto" — deterministic regardless of `supported_locales()` contents
-        // since it never reaches locale matching.
+        // "auto".
         let settings = AppSettings {
             selected_language: "AUTO".to_string(),
             ..AppSettings::default()
@@ -2051,27 +2003,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_apple_locale_preserves_script_qualified_value_when_unmatched() {
-        // "qq-Qaaa" isn't a real language/script combination, so it can never
-        // match `apple_speech::supported_locales()` (real or stub) on the full
-        // tag or the base subtag — deterministic across every environment.
-        // Proves the new script-aware full-tag-match-first branch doesn't
-        // mangle a script-qualified value it can't resolve; it should still
-        // fall through to BCP-47 passthrough like any other unmatched
-        // already-BCP-47 value.
+    fn resolve_apple_locale_passes_through_a_concrete_value_unchanged() {
+        // Apple now owns equivalence (`SpeechTranscriber.supportedLocale
+        // (equivalentTo:)` on the Swift side), so any non-empty, non-"auto"
+        // value is passed through verbatim — no matching against
+        // `apple_speech::supported_locales()`, hermetic regardless of the
+        // live locale list.
         let settings = AppSettings {
-            selected_language: "qq-Qaaa".to_string(),
+            selected_language: "fr".to_string(),
             ..AppSettings::default()
         };
-        assert_eq!(resolve_apple_locale(&settings), "qq-Qaaa");
+        assert_eq!(resolve_apple_locale(&settings), "fr");
 
-        // Mixed-case variant of the same synthetic tag: case must not affect
-        // whether (or how) the value passes through when unmatched.
         let settings = AppSettings {
-            selected_language: "QQ-qaaa".to_string(),
+            selected_language: "zh-Hant".to_string(),
             ..AppSettings::default()
         };
-        assert_eq!(resolve_apple_locale(&settings), "QQ-qaaa");
+        assert_eq!(resolve_apple_locale(&settings), "zh-Hant");
+    }
+
+    #[test]
+    fn resolve_apple_locale_trims_whitespace_around_a_concrete_value() {
+        let settings = AppSettings {
+            selected_language: "  fr  ".to_string(),
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_apple_locale(&settings), "fr");
     }
 
     #[test]
