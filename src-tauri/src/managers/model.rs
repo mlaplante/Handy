@@ -35,6 +35,9 @@ pub enum EngineType {
     GigaAM,
     Canary,
     Cohere,
+    /// Apple SpeechAnalyzer/SpeechTranscriber (macOS 26+), reached via the
+    /// `apple_speech` FFI bridge. No downloadable weights — the OS holds them.
+    AppleSpeech,
 }
 
 /// Where a model comes from and how Handy obtains it — the routing discriminant
@@ -54,6 +57,20 @@ pub enum ModelSource {
     /// Already present on disk — a user-provided custom model, or one discovered
     /// in a shared cache. Nothing to download.
     Local,
+    /// OS-provided backend with nothing to fetch over HTTP. "Obtainable" is
+    /// decided at runtime by the backend's availability check; per-language
+    /// assets (if any) are installed via the backend, not downloaded here.
+    System,
+}
+
+/// Whether a `ModelSource::System` model (currently only Apple Speech) should
+/// report `is_downloaded = true` in the catalog. There's no file to check for
+/// on disk: the OS either exposes the backend or it doesn't. Per-locale asset
+/// readiness is a separate, load-time concern (`apple_speech::locale_installed`
+/// / `install_locale`), not a catalog-download concern — see the `AppleSpeech`
+/// load arm in `transcription.rs`.
+fn system_model_is_downloaded() -> bool {
+    crate::apple_speech::available()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1105,18 +1122,24 @@ impl ModelManager {
         list
     }
 
-    /// Seed the bundled catalog ([`crate::catalog::CATALOG`]) into the registry,
-    /// inserting each model whose id isn't already present (additive).
+    /// Seed the bundled catalog ([`crate::catalog::apple_augmented_catalog`])
+    /// into the registry, inserting each model whose id isn't already present
+    /// (additive).
     ///
     /// Catalog (`.gguf`, `HuggingFace`) and legacy (`.bin`/ONNX, `Url`) entries
     /// stay SEPARATE — different files, ids, and runtimes. Nothing is merged or
     /// removed; the UI just hides not-on-disk `Url` entries to deprecate legacy
     /// downloads, while already-downloaded ones stay runnable. Runs before the
     /// on-disk scans so a cached model dedups onto its catalog entry.
+    ///
+    /// `apple_augmented_catalog()` appends the availability-gated "Built-in
+    /// (Apple)" descriptor (`ModelSource::System`) to the bundled catalog when
+    /// `apple_speech::available()`, so the OS-provided backend is seeded
+    /// through this same additive path — no separate registration needed.
     fn seed_catalog_models(available_models: &mut HashMap<String, ModelInfo>) {
         use std::collections::hash_map::Entry;
         let mut added = 0usize;
-        for desc in crate::catalog::CATALOG.iter() {
+        for desc in crate::catalog::apple_augmented_catalog().into_iter() {
             if let Entry::Vacant(slot) = available_models.entry(desc.id.clone()) {
                 slot.insert(desc.to_model_info(&DiskStatus::default()));
                 added += 1;
@@ -1308,6 +1331,17 @@ impl ModelManager {
         for model in models.values_mut() {
             if let ModelSource::HuggingFace { repo_id, revision } = &model.source {
                 model.is_downloaded = hf_cached_path(repo_id, revision, &model.filename).is_some();
+                model.is_downloading = false;
+                model.partial_size = 0;
+                continue;
+            }
+            if matches!(model.source, ModelSource::System) {
+                // OS-provided backend (Apple Speech): there is no catalog file
+                // to check for on disk. The OS either exposes the API or it
+                // doesn't; per-locale assets are a load-time concern handled
+                // by `apple_speech::install_locale`, not a download-status
+                // concern here.
+                model.is_downloaded = system_model_is_downloaded();
                 model.is_downloading = false;
                 model.partial_size = 0;
                 continue;
@@ -1842,6 +1876,24 @@ impl ModelManager {
             ModelSource::Local => {
                 return Err(anyhow::anyhow!("No download source for model"));
             }
+            ModelSource::System => {
+                // OS-provided backend (e.g. Apple Speech): nothing to fetch over
+                // HTTP or the HF cache. `is_downloaded` for System models is now
+                // `apple_speech::available()` (see `update_download_status`), so
+                // in the normal UI flow this arm is unreachable: the frontend
+                // only shows a "Download" action when `is_downloaded == false`
+                // (see `ModelsSettings.tsx`'s `downloadable` status/section
+                // split), and once Apple Speech is available the model is
+                // already sorted into the "downloaded" section with no download
+                // button. Per-language asset install is a separate, backend-
+                // specific path (`apple_speech::install_locale`) driven from the
+                // model *load* arm in `transcription.rs`, not from this download
+                // flow. Keep this an explicit error rather than a silent no-op
+                // or a URL/HF fetch attempt, in case something still calls it.
+                return Err(anyhow::anyhow!(
+                    "No download source for model; OS-provided models install language assets separately"
+                ));
+            }
         };
         let model_path = self.models_dir.join(&model_info.filename);
         let partial_path = self
@@ -2290,6 +2342,18 @@ impl ModelManager {
             });
         }
 
+        if matches!(model_info.source, ModelSource::System) {
+            // OS-provided backend (Apple Speech): there is no on-disk model
+            // file to resolve. `EngineType::AppleSpeech`'s load arm in
+            // `transcription.rs` never reads this returned path — it only
+            // needed `get_model_path` to succeed so `load_model` proceeds
+            // past its unconditional path-resolution step. Kept as an
+            // explicit early return (not folded into the directory/file
+            // existence checks below) so it can't accidentally inherit
+            // file-existence semantics that don't apply to it.
+            return Ok(PathBuf::new());
+        }
+
         let model_path = self.models_dir.join(&model_info.filename);
         let partial_path = self
             .models_dir
@@ -2358,6 +2422,21 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    // `update_download_status` is a `ModelManager` method that requires a real
+    // `AppHandle` (app data dir, Tauri state, …) to construct — too heavy to
+    // stand up here just to exercise one branch. Instead this asserts the
+    // decision `update_download_status`'s `ModelSource::System` branch
+    // delegates to: is_downloaded is exactly `apple_speech::available()`. On
+    // non-macOS-aarch64 CI that's a stub returning `false`, so this is total
+    // and never flaky.
+    #[test]
+    fn system_model_is_downloaded_matches_apple_speech_availability() {
+        assert_eq!(
+            system_model_is_downloaded(),
+            crate::apple_speech::available()
+        );
+    }
 
     #[test]
     fn test_effective_language_accepts_chinese_script_intent_for_zh_capability() {
