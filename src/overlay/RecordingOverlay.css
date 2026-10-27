@@ -7,18 +7,16 @@
   --s-surface: color-mix(in srgb, var(--color-background) 98%, transparent);
   /* Accent = logo pink; flips automatically via --color-logo-primary. */
   --s-accent: var(--color-logo-primary);
+  /* The rest come from theme.css, which already follows the theme setting. */
   --s-accent-soft: color-mix(
     in srgb,
-    var(--color-background-ui) 16%,
+    var(--color-logo-primary) 20%,
     transparent
   );
-  /* Neutrals. Hairlines reuse the app's mid-gray at low opacity — same vocabulary
-     as the app's border-mid-gray/* utilities. muted/faint are overlay-specific
-     secondary/tertiary text grays (no theme equivalent). */
-  --s-muted: #6e6e6e;
-  --s-faint: #9a9a9a;
-  --s-border: color-mix(in srgb, var(--color-mid-gray) 22%, transparent);
-  --s-hair: color-mix(in srgb, var(--color-mid-gray) 12%, transparent);
+  --s-muted: var(--color-ink-2);
+  --s-faint: var(--color-ink-3);
+  --s-border: var(--color-line);
+  --s-hair: var(--color-wash);
 
   /* Card geometry — single source of truth for the visible overlay sizes. The
      native overlay window (overlay.rs) is sized from these: it must be at least
@@ -34,23 +32,6 @@
   --ov-base-h: 40px; /* control-row height (.sbase) */
   --ov-cap-max-h: 64px; /* max height of the scrolling live-text region */
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Accent uses the lighter logo pink in dark — reads better on the dark
-       surface than the deeper UI pink. */
-    --s-accent-soft: color-mix(
-      in srgb,
-      var(--color-logo-primary) 20%,
-      transparent
-    );
-    --s-muted: #a3a09a;
-    --s-faint: #6f6c66;
-    /* Hairlines flip to the near-white text token for contrast on dark. */
-    --s-border: color-mix(in srgb, var(--color-text) 12%, transparent);
-    --s-hair: color-mix(in srgb, var(--color-text) 8%, transparent);
-  }
-}
-
 /* ============================================================
    Unified overlay stage — one fixed, transparent container shared by the compact
    pill and the Live panel (both render the same `.scard` base). The card is
@@ -118,6 +99,9 @@
 /* Shared base card. Flat: theme surface + hairline border, no shadow or blur. */
 .scard {
   width: var(--ov-pill-w);
+  /* Never wider than the window: an unaccounted content zoom degrades to a
+     narrower card instead of clipping. 2px = our border (no border-box reset). */
+  max-width: calc(100vw - 2px);
   border-radius: 24px;
   overflow: hidden;
   display: flex;
@@ -192,7 +176,9 @@
   min-height: 0;
 }
 .stext-cap {
-  max-height: var(--ov-cap-max-h);
+  /* Vertical counterpart of the .scard clamp: show fewer lines rather than clip.
+     20px = cap padding (12) + card borders (2) + 6px slack for zoom rounding. */
+  max-height: min(var(--ov-cap-max-h), calc(100vh - var(--ov-base-h) - 20px));
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -205,7 +191,7 @@
   font-style: italic;
   line-height: 1.35;
   letter-spacing: -0.003em;
-  color: color-mix(in srgb, var(--color-text) 90%, transparent);
+  color: var(--color-text);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
   scrollbar-width: none; /* Firefox */
@@ -222,6 +208,9 @@
 }
 .stext-cap .tentative {
   color: inherit;
+}
+.stext-cap .sloading {
+  color: var(--s-muted);
 }
 .scaret {
   display: inline-block;
@@ -243,6 +232,7 @@
    Same structure for pill & panel; the dot stays anchored left in both. */
 .sbase {
   height: var(--ov-base-h);
+  flex: none; /* the control row never squashes; only the text region gives */
   padding: 0 10px;
   display: grid;
   /* Equal side columns (min 22px to hold the cancel button) keep the center item
@@ -267,9 +257,22 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--s-accent);
   flex: none;
+  box-sizing: border-box;
+  transition:
+    background-color 180ms ease,
+    opacity 180ms ease;
+}
+.sdot.ready {
+  background: var(--s-accent);
+  opacity: 1;
   animation: sdot-pulse 1.9s infinite;
+}
+/* A quiet neutral dot while the host has not delivered its first sample yet. */
+.sdot.arming {
+  background: var(--s-muted);
+  opacity: 0.45;
+  animation: none;
 }
 @keyframes sdot-pulse {
   0% {
@@ -291,7 +294,9 @@
   opacity: 1;
 }
 
-/* Waveform — simple reactive bars, themed; heights set inline from mic levels. */
+/* Waveform — reactive only after the first microphone callback. While arming,
+   a muted travelling pulse acknowledges the shortcut without pretending that
+   audio levels are already being received. */
 .swave {
   display: flex;
   align-items: center;
@@ -306,7 +311,42 @@
   max-height: 18px;
   border-radius: 2px;
   background: var(--s-accent);
-  transition: height 80ms linear;
+  transition:
+    height 80ms linear,
+    background-color 180ms ease,
+    opacity 180ms ease;
+}
+.swave.arming i {
+  height: 6px !important;
+  background: var(--s-muted);
+  opacity: 0.35;
+  animation: swave-arming 900ms ease-in-out infinite;
+}
+.swave.arming i:nth-child(2),
+.swave.arming i:nth-child(8) {
+  animation-delay: 75ms;
+}
+.swave.arming i:nth-child(3),
+.swave.arming i:nth-child(7) {
+  animation-delay: 150ms;
+}
+.swave.arming i:nth-child(4),
+.swave.arming i:nth-child(6) {
+  animation-delay: 225ms;
+}
+.swave.arming i:nth-child(5) {
+  animation-delay: 300ms;
+}
+@keyframes swave-arming {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+    opacity: 0.25;
+  }
+  50% {
+    transform: scaleY(1.5);
+    opacity: 0.7;
+  }
 }
 .sx {
   width: 22px;

@@ -1,6 +1,5 @@
 import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface MarkdownContentProps {
@@ -12,25 +11,17 @@ const allowedElements = [
   "blockquote",
   "br",
   "code",
-  "del",
   "em",
   "h1",
   "h2",
   "h3",
   "hr",
   "img",
-  "input",
   "li",
   "ol",
   "p",
   "pre",
   "strong",
-  "table",
-  "tbody",
-  "td",
-  "th",
-  "thead",
-  "tr",
   "ul",
 ];
 
@@ -75,55 +66,21 @@ const components: Components = {
     <h3 className="text-sm font-semibold leading-snug text-text">{children}</h3>
   ),
   p: ({ children }) => (
-    <p className="text-sm leading-relaxed text-text/80">{children}</p>
+    <p className="text-sm leading-relaxed text-text">{children}</p>
   ),
-  ul: ({ children, className }) => {
-    const isTaskList = className?.includes("contains-task-list");
-
-    return (
-      <ul
-        className={`space-y-1 text-sm leading-relaxed text-text/80 ${
-          isTaskList ? "ps-0" : "list-disc ps-5"
-        }`}
-      >
-        {children}
-      </ul>
-    );
-  },
-  li: ({ children, className }) => {
-    const isTaskListItem = className?.includes("task-list-item");
-
-    return (
-      <li
-        className={`${isTaskListItem ? "list-none" : "pl-1"} marker:text-text/50`}
-      >
-        {children}
-      </li>
-    );
-  },
-  input: ({ checked, type }) => {
-    if (type !== "checkbox") return null;
-
-    return (
-      <input
-        type="checkbox"
-        checked={Boolean(checked)}
-        disabled
-        readOnly
-        className="me-2 h-3.5 w-3.5 align-middle accent-logo-primary"
-      />
-    );
-  },
+  ul: ({ children }) => (
+    <ul className="list-disc space-y-1 ps-5 text-sm leading-relaxed text-text">
+      {children}
+    </ul>
+  ),
+  li: ({ children }) => <li className="pl-1 marker:text-ink-3">{children}</li>,
   ol: ({ children }) => (
-    <ol className="list-decimal space-y-1 ps-5 text-sm leading-relaxed text-text/80">
+    <ol className="list-decimal space-y-1 ps-5 text-sm leading-relaxed text-text">
       {children}
     </ol>
   ),
-  del: ({ children }) => (
-    <del className="text-text/60 line-through">{children}</del>
-  ),
   br: () => <br />,
-  hr: () => <hr className="border-mid-gray/20" />,
+  hr: () => <hr className="border-line" />,
   img: ({ alt, src }) => {
     if (!src || !isSafeImageSrc(src)) return null;
 
@@ -137,26 +94,8 @@ const components: Components = {
       />
     );
   },
-  table: ({ children }) => (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-left text-sm leading-relaxed text-text/80">
-        {children}
-      </table>
-    </div>
-  ),
-  thead: ({ children }) => (
-    <thead className="border-b border-mid-gray/30 text-text">{children}</thead>
-  ),
-  tbody: ({ children }) => (
-    <tbody className="divide-y divide-mid-gray/20">{children}</tbody>
-  ),
-  tr: ({ children }) => <tr>{children}</tr>,
-  th: ({ children }) => (
-    <th className="px-2 py-1.5 font-semibold">{children}</th>
-  ),
-  td: ({ children }) => <td className="px-2 py-1.5 align-top">{children}</td>,
   blockquote: ({ children }) => (
-    <blockquote className="border-s-2 border-logo-primary/50 ps-3 text-sm leading-relaxed text-text/70">
+    <blockquote className="border-s-2 border-logo-primary/50 ps-3 text-sm leading-relaxed text-ink-2">
       {children}
     </blockquote>
   ),
@@ -172,13 +111,13 @@ const components: Components = {
     }
 
     return (
-      <code className="rounded bg-mid-gray/10 px-1 py-0.5 font-mono text-[0.85em]">
+      <code className="rounded bg-wash px-1 py-0.5 font-mono text-[0.85em]">
         {children}
       </code>
     );
   },
   pre: ({ children }) => (
-    <pre className="overflow-x-auto rounded-md bg-mid-gray/10 p-3 text-xs leading-relaxed text-text/80">
+    <pre className="overflow-x-auto rounded-md bg-wash p-3 text-xs leading-relaxed text-text">
       {children}
     </pre>
   ),
@@ -195,7 +134,7 @@ const components: Components = {
           event.preventDefault();
           void openSafeUrl(href);
         }}
-        className="text-logo-primary underline decoration-logo-primary/40 underline-offset-2 hover:decoration-logo-primary"
+        className="text-logo-primary underline decoration-logo-primary underline-offset-2 hover:decoration-logo-primary"
       >
         {children}
       </a>
@@ -211,7 +150,6 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = ({
       <ReactMarkdown
         allowedElements={allowedElements}
         components={components}
-        remarkPlugins={[remarkGfm]}
         skipHtml
       >
         {markdown}

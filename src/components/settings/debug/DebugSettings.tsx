@@ -4,15 +4,31 @@ import { WordCorrectionThreshold } from "./WordCorrectionThreshold";
 import { LogLevelSelector } from "./LogLevelSelector";
 import { LiveLogViewer } from "./LiveLogViewer";
 import { PasteDelay } from "./PasteDelay";
+import { HoldThreshold } from "./HoldThreshold";
+import { ReliablePasteToggle } from "./ReliablePaste";
 import { RecordingBuffer } from "./RecordingBuffer";
+import { LanguageDetectionWindow } from "./LanguageDetectionWindow";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { AlwaysOnMicrophone } from "../AlwaysOnMicrophone";
 import { SoundPicker } from "../SoundPicker";
 import { ClamshellMicrophoneSelector } from "../ClamshellMicrophoneSelector";
 import { UpdateChecksToggle } from "../UpdateChecksToggle";
 import { WhatsNewPreview } from "./WhatsNewPreview";
+import { KeyboardDiagnostic } from "./KeyboardDiagnostic";
+import { DebugRun, OnboardingPreview } from "./OnboardingPreview";
+import type { OnboardingStep } from "../../onboarding/onboardingStore";
 
-export const DebugSettings: React.FC = () => {
+interface DebugSettingsProps {
+  onPreviewOnboarding: (step: OnboardingStep) => void;
+  onRunOnboarding: () => void;
+  onRunModelMigration: () => void;
+}
+
+export const DebugSettings: React.FC<DebugSettingsProps> = ({
+  onPreviewOnboarding,
+  onRunOnboarding,
+  onRunModelMigration,
+}) => {
   const { t } = useTranslation();
 
   return (
@@ -20,6 +36,23 @@ export const DebugSettings: React.FC = () => {
       <SettingsGroup title={t("settings.debug.title")}>
         <LogLevelSelector grouped={true} />
         <WhatsNewPreview descriptionMode="tooltip" grouped={true} />
+        <OnboardingPreview
+          onPreview={onPreviewOnboarding}
+          descriptionMode="tooltip"
+          grouped={true}
+        />
+        <DebugRun
+          run="onboardingRun"
+          onRun={onRunOnboarding}
+          descriptionMode="tooltip"
+          grouped={true}
+        />
+        <DebugRun
+          run="modelMigration"
+          onRun={onRunModelMigration}
+          descriptionMode="tooltip"
+          grouped={true}
+        />
         <UpdateChecksToggle descriptionMode="tooltip" grouped={true} />
         <SoundPicker
           label={t("settings.debug.soundTheme.label")}
@@ -34,9 +67,13 @@ export const DebugSettings: React.FC = () => {
           labelKey="settings.debug.pasteDelayAfter.title"
           descriptionKey="settings.debug.pasteDelayAfter.description"
         />
+        <ReliablePasteToggle descriptionMode="tooltip" grouped={true} />
+        <HoldThreshold descriptionMode="tooltip" grouped={true} />
         <RecordingBuffer descriptionMode="tooltip" grouped={true} />
+        <LanguageDetectionWindow descriptionMode="tooltip" grouped={true} />
         <AlwaysOnMicrophone descriptionMode="tooltip" grouped={true} />
         <ClamshellMicrophoneSelector descriptionMode="tooltip" grouped={true} />
+        <KeyboardDiagnostic />
         <LiveLogViewer descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
     </div>

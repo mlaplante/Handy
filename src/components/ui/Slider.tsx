@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingContainer } from "./SettingContainer";
+import { ResetButton } from "./ResetButton";
 
 interface SliderProps {
   value: number;
@@ -14,6 +15,8 @@ interface SliderProps {
   grouped?: boolean;
   showValue?: boolean;
   formatValue?: (value: number) => string;
+  onReset?: () => void;
+  isResetting?: boolean;
 }
 
 export const Slider: React.FC<SliderProps> = ({
@@ -29,6 +32,8 @@ export const Slider: React.FC<SliderProps> = ({
   grouped = false,
   showValue = true,
   formatValue = (v) => v.toFixed(2),
+  onReset,
+  isResetting = false,
 }) => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onChange(parseFloat(e.target.value));
@@ -47,6 +52,7 @@ export const Slider: React.FC<SliderProps> = ({
         <div className="flex items-center space-x-1 h-6">
           <input
             type="range"
+            aria-label={label}
             min={min}
             max={max}
             step={step}
@@ -57,15 +63,16 @@ export const Slider: React.FC<SliderProps> = ({
             style={{
               background: `linear-gradient(to right, var(--color-background-ui) ${
                 ((value - min) / (max - min)) * 100
-              }%, rgba(128, 128, 128, 0.2) ${
-                ((value - min) / (max - min)) * 100
-              }%)`,
+              }%, var(--color-line) ${((value - min) / (max - min)) * 100}%)`,
             }}
           />
           {showValue && (
-            <span className="text-sm font-medium text-text/90 w-12 text-end">
+            <span className="text-sm font-medium text-text w-12 text-end">
               {formatValue(value)}
             </span>
+          )}
+          {onReset && (
+            <ResetButton onClick={onReset} disabled={disabled || isResetting} />
           )}
         </div>
       </div>

@@ -17,21 +17,6 @@ This guide covers how to set up the development environment and build Handy from
 - Xcode Command Line Tools
 - Install with: `xcode-select --install`
 
-##### Intel Mac (x86_64)
-
-Prebuilt ONNX Runtime binaries are not available for Intel Macs. Install ONNX Runtime via Homebrew and link dynamically:
-
-```bash
-brew install onnxruntime
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri dev
-```
-
-The same environment variables apply for production builds:
-
-```bash
-ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun run tauri build
-```
-
 #### Windows
 
 - Microsoft C++ Build Tools: Visual Studio 2019/2022 with C++ development
@@ -70,19 +55,19 @@ ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib ORT_PREFER_DYNAMIC_LINK=1 bun 
   ```bash
   # Ubuntu/Debian
   sudo apt update
-  sudo apt install build-essential libasound2-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
+  sudo apt install build-essential clang libclang-dev libevdev-dev libasound2-dev pkg-config libssl-dev libvulkan-dev vulkan-tools glslc spirv-headers glslang-tools libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-layer-shell0 libgtk-layer-shell-dev patchelf cmake
 
   # Fedora/RHEL
   sudo dnf groupinstall "Development Tools"
-  sudo dnf install alsa-lib-devel pkgconf openssl-devel vulkan-devel \
-    spirv-headers-devel spirv-tools-devel glslang glslc \
+  sudo dnf install alsa-lib-devel pkgconf openssl-devel vulkan-devel glslc \
+    clang clang-devel libevdev-devel \
+    spirv-headers-devel spirv-tools-devel glslang \
     gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel \
     gtk-layer-shell gtk-layer-shell-devel \
     cmake
 
   # Arch Linux
-  sudo pacman -S base-devel alsa-lib pkgconf openssl vulkan-devel \
-    spirv-headers glslang shaderc \
+  sudo pacman -S base-devel clang libevdev shaderc spirv-headers glslang alsa-lib pkgconf openssl vulkan-devel \
     gtk3 webkit2gtk-4.1 libappindicator-gtk3 librsvg gtk-layer-shell \
     cmake
   ```
@@ -130,20 +115,53 @@ sudo cp usr/bin/handy /usr/bin/
 sudo cp -a usr/lib/. /usr/lib/
 sudo cp -r usr/share/icons/hicolor/* /usr/share/icons/hicolor/
 sudo cp usr/share/applications/Handy.desktop /usr/share/applications/
-sudo ldconfig
 ```
+
+The runtime libraries live in the app-private `/usr/lib/Handy/` (on the binary's rpath), so no `ldconfig` step is needed.
 
 After subsequent rebuilds, copy the binary and any refreshed runtime libraries:
 
 ```bash
 sudo cp src-tauri/target/release/handy /usr/bin/
-sudo cp -a src-tauri/transcribe-libs/. /usr/lib/
-sudo ldconfig
+sudo mkdir -p /usr/lib/Handy
+sudo cp -a src-tauri/transcribe-libs/. /usr/lib/Handy/
 ```
 
 Resources only need re-copying if they change upstream (new icons, sounds, models, etc.).
 
 ## Troubleshooting
+
+### macOS Accessibility remains enabled after a local rebuild
+
+Local builds use the ad-hoc `signingIdentity: "-"`. A rebuild can have a new macOS code
+identity while the old **System Settings > Privacy & Security > Accessibility** entry
+remains visibly enabled, leaving Handy on `Waiting...`.
+
+After installing the final bundle at `/Applications/Handy.app`, quit Handy, clear only its
+stale Accessibility record, then reopen it:
+
+```bash
+osascript -e 'tell application id "com.pais.handy" to quit' || true
+tccutil reset Accessibility com.pais.handy
+open /Applications/Handy.app
+```
+
+Grant Accessibility again when prompted. This does not reset Microphone or other TCC
+services, and official releases normally do not need it.
+
+For optional diagnosis, compare the designated requirements of the previous and rebuilt
+bundles:
+
+```bash
+codesign -dr - /path/to/previous/Handy.app 2>&1
+codesign -dr - /Applications/Handy.app 2>&1
+```
+
+An ad-hoc requirement contains a `cdhash`; a changed requirement confirms the rebuild is
+not covered by the old grant. The reset procedure does not require this check.
+
+See [issue #1618](https://github.com/cjpais/Handy/issues/1618) for the related onboarding
+and stale-permission report.
 
 ### AppImage build fails on Arch / rolling-release distros
 
