@@ -51,6 +51,30 @@
       "breeze-asr": {
         "name": "Breeze ASR",
         "description": "Optimized for Taiwanese Mandarin. Code-switching support."
+      },
+      "sense-voice-int8": {
+        "name": "SenseVoice",
+        "description": "Very fast. Chinese, English, Japanese, Korean, Cantonese."
+      },
+      "gigaam-v3-e2e-ctc": {
+        "name": "GigaAM v3",
+        "description": "Russian speech recognition. Fast and accurate."
+      },
+      "canary-180m-flash": {
+        "name": "Canary 180M Flash",
+        "description": "Very fast. English, German, Spanish, French. Supports translation."
+      },
+      "canary-1b-v2": {
+        "name": "Canary 1B v2",
+        "description": "Accurate multilingual. 25 European languages. Supports translation."
+      },
+      "cohere-int8": {
+        "name": "Cohere",
+        "description": "A large, slower, but very accurate multilingual model."
+      },
+      "apple-speechanalyzer": {
+        "name": "Built-in (Apple)",
+        "description": "On-device speech recognition built into macOS 26+; no download required."
       }
     },
     "errors": {
@@ -305,6 +329,7 @@
   "modelSelector": {
     "custom": "Custom",
     "streaming": "Streaming",
+    "system": "System",
     "active": "Active",
     "noModelsAvailable": "No models available",
     "verifying": "Verifying {{modelName}}...",

@@ -40,13 +40,16 @@ export const toTableModel = (info: ModelInfo, t: TFunction): TableModel => {
     sizeMb: Number(info.size_mb),
     // The file's own, so a different quant found on disk says so.
     quant: quantOf(info.filename) ?? model?.quant ?? null,
-    kind: info.is_custom
-      ? "custom"
-      : isLegacyModel(info)
-        ? "legacy"
-        : model?.curated
-          ? "curated"
-          : "catalog",
+    kind:
+      typeof info.source === "object" && "System" in info.source
+        ? "system"
+        : info.is_custom
+          ? "custom"
+          : isLegacyModel(info)
+            ? "legacy"
+            : model?.curated
+              ? "curated"
+              : "catalog",
     model,
   };
 };

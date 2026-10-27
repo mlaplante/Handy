@@ -13,7 +13,7 @@ use crate::language_detection::{
     IdentifyError, LanguageDecision, LanguageDetector, LanguageSource, Plan,
 };
 use crate::managers::audio::{create_smoothed_detector, AudioRecordingManager};
-use crate::managers::model::ModelManager;
+use crate::managers::model::{ModelManager, ModelSource};
 use crate::settings::{
     get_settings, AppSettings, ChineseScript, ModelUnloadTimeout, TranscribeAcceleratorSetting,
 };
@@ -247,6 +247,7 @@ pub struct TranscriptionManager {
     model_manager: Arc<ModelManager>,
     app_handle: AppHandle,
     current_model_id: Arc<Mutex<Option<String>>>,
+    apple_speech_locale: Arc<Mutex<Option<String>>>,
     last_activity: Arc<AtomicU64>,
     shutdown_signal: Arc<AtomicBool>,
     watcher_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
@@ -285,6 +286,7 @@ impl TranscriptionManager {
             model_manager,
             app_handle: app_handle.clone(),
             current_model_id: Arc::new(Mutex::new(None)),
+            apple_speech_locale: Arc::new(Mutex::new(None)),
             last_activity: Arc::new(AtomicU64::new(Self::now_ms())),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
             watcher_handle: Arc::new(Mutex::new(None)),
@@ -376,7 +378,7 @@ impl TranscriptionManager {
     pub fn is_model_loaded(&self) -> bool {
         // A transcribe-cpp model stays loaded while it is busy, so a batch
         // run or stream in progress never reads as "unloaded".
-        self.engine.loaded().is_some()
+        self.engine.loaded().is_some() || self.apple_speech_locale.lock().unwrap().is_some()
     }
 
     /// Accelerator changes should not disturb the current transcription. Mark
@@ -466,6 +468,7 @@ impl TranscriptionManager {
     fn begin_unload(&self) -> Unloading {
         let unloading = self.engine.unload();
         self.language_detector.unload();
+        *self.apple_speech_locale.lock().unwrap() = None;
         {
             let mut current_model = self.current_model_id.lock().unwrap();
             *current_model = None;
@@ -579,6 +582,55 @@ impl TranscriptionManager {
             return Err(anyhow::anyhow!(error_msg));
         }
 
+        if matches!(&model_info.source, ModelSource::System) {
+            self.engine.unload().wait();
+            self.language_detector.unload();
+            *self.apple_speech_locale.lock().unwrap() = None;
+            *self.current_model_id.lock().unwrap() = None;
+
+            if !crate::apple_speech::available() {
+                let error_msg = "Apple Speech backend is not available on this system";
+                emit_loading_failed(error_msg);
+                return Err(anyhow::anyhow!(error_msg));
+            }
+
+            let locale = resolve_apple_locale(&get_settings(&self.app_handle));
+            if !crate::apple_speech::locale_installed(&locale) {
+                info!(
+                    "Apple Speech locale '{}' assets not yet installed; installing now",
+                    locale
+                );
+                if let Err(error) = crate::apple_speech::install_locale(&locale) {
+                    let error_msg = format!(
+                        "Failed to install Apple Speech language assets for '{}': {}",
+                        locale, error
+                    );
+                    emit_loading_failed(&error_msg);
+                    return Err(anyhow::anyhow!(error_msg));
+                }
+                info!("Apple Speech locale '{}' assets installed", locale);
+            }
+
+            *self.apple_speech_locale.lock().unwrap() = Some(locale);
+            *self.current_model_id.lock().unwrap() = Some(model_id.to_string());
+            self.touch_activity();
+            let _ = self.app_handle.emit(
+                "model-state-changed",
+                ModelStateEvent {
+                    event_type: "loading_completed".to_string(),
+                    model_id: Some(model_id.to_string()),
+                    model_name: Some(model_info.name.clone()),
+                    error: None,
+                },
+            );
+            debug!(
+                "Successfully loaded transcription model: {} (took {}ms)",
+                model_id,
+                load_start.elapsed().as_millis()
+            );
+            return Ok(());
+        }
+
         let model_path = self
             .model_manager
             .get_model_path(model_id)
@@ -590,6 +642,7 @@ impl TranscriptionManager {
             let mut current_model = self.current_model_id.lock().unwrap();
             *current_model = None;
         }
+        *self.apple_speech_locale.lock().unwrap() = None;
 
         // The backend is chosen at load time. With an explicit
         // `device_index` (the --device-index flag) hard-select that
@@ -722,7 +775,13 @@ impl TranscriptionManager {
     /// diagnostics (e.g. confirming `--device-index` actually bound a GPU rather
     /// than falling back to CPU/auto); `None` when no model is loaded.
     pub fn current_backend(&self) -> Option<String> {
-        self.engine.loaded().map(|info| info.backend)
+        self.engine.loaded().map(|info| info.backend).or_else(|| {
+            self.apple_speech_locale
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|_| "apple-speech".to_string())
+        })
     }
 
     /// Whether a file job is queued or running, which holds the model.
@@ -1008,10 +1067,38 @@ impl TranscriptionManager {
     /// Decode a whole clip with the loaded model, loading it first if a load
     /// is under way.
     fn decode_batch(&self, audio: Vec<f32>) -> Result<RunOutcome> {
-        // A cancel from here on (during the model-load wait or chunk planning
-        // included) stops every run of this transcription.
-        let mark = self.engine.cancel_mark();
         self.touch_activity();
+
+        {
+            let mut is_loading = self.is_loading.lock().unwrap();
+            while *is_loading {
+                is_loading = self.loading_condvar.wait(is_loading).unwrap();
+            }
+        }
+
+        let apple_locale = self.apple_speech_locale.lock().unwrap().clone();
+        if let Some(locale) = apple_locale {
+            let text = crate::apple_speech::transcribe(&audio, &locale)
+                .map_err(|error| anyhow::anyhow!("Apple Speech transcription failed: {error}"))?;
+            return Ok(RunOutcome {
+                setup: RunSetup {
+                    run_options: RunOptions::default(),
+                    language: LanguageDecision {
+                        language: Some(locale.clone()),
+                        source: LanguageSource::Selected,
+                    },
+                    languages: crate::apple_speech::supported_locales(),
+                    applied_language_hint: Some(locale),
+                    output_was_translated: false,
+                },
+                text,
+                model_detected_language: None,
+            });
+        }
+
+        // A cancel from here on (during chunk planning included) stops every
+        // transcribe-cpp run of this transcription.
+        let mark = self.engine.cancel_mark();
         let batch = self.batch_context(&audio)?;
         self.transcribe_cpp(mark, batch, audio)
     }
@@ -1561,6 +1648,14 @@ fn vocabulary_for_model(supports_vocabulary: bool, custom_words: &[String]) -> V
     }
 }
 
+fn resolve_apple_locale(settings: &AppSettings) -> String {
+    let language = settings.selected_language.trim();
+    if language.is_empty() || language.eq_ignore_ascii_case("auto") {
+        return "en-US".to_string();
+    }
+    language.to_string()
+}
+
 struct TranscribeCppRunPlan {
     task: Task,
     language: Option<String>,
@@ -1948,6 +2043,28 @@ mod tests {
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_apple_locale_defaults_to_en_us() {
+        for selected_language in ["auto", "", "AUTO", "Auto"] {
+            let settings = AppSettings {
+                selected_language: selected_language.to_string(),
+                ..AppSettings::default()
+            };
+            assert_eq!(resolve_apple_locale(&settings), "en-US");
+        }
+    }
+
+    #[test]
+    fn resolve_apple_locale_passes_through_trimmed_language_intent() {
+        for (selected_language, expected) in [("fr", "fr"), ("  zh-Hant  ", "zh-Hant")] {
+            let settings = AppSettings {
+                selected_language: selected_language.to_string(),
+                ..AppSettings::default()
+            };
+            assert_eq!(resolve_apple_locale(&settings), expected);
+        }
     }
 
     #[test]

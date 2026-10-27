@@ -22,6 +22,10 @@ export const ModelRow: React.FC<{ entry: Entry }> = ({ entry }) => {
   const place = usePlace(entry.id);
   const target = useIsTarget(entry.id);
   const locked = useModelsLocked();
+  const isSystem = useModelStore((s) => {
+    const source = s.models.find((model) => model.id === entry.id)?.source;
+    return !!source && typeof source === "object" && "System" in source;
+  });
   const percent = useModelStore(
     (s) => s.downloadProgress[entry.id]?.percentage ?? 0,
   );
@@ -41,7 +45,7 @@ export const ModelRow: React.FC<{ entry: Entry }> = ({ entry }) => {
   const onDisk = place === "active" || place === "ready" || place === "loading";
   const on = place === "active";
   // While History transcribes, the model in use can't change or go away.
-  const deletable = onDisk && !(locked && on);
+  const deletable = onDisk && !isSystem && !(locked && on);
   const inert = locked && place === "ready";
   const size = formatModelSize(entry.sizeMb);
   const download =

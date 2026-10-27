@@ -1290,7 +1290,11 @@ sha256: string | null } } |
  * Already present on disk — a user-provided custom model, or one discovered
  * in a shared cache. Nothing to download.
  */
-"Local"
+"Local" | 
+/**
+* OS-provided backend with nothing to fetch over HTTP.
+*/
+"System"
 export type ModelUnloadTimeout = "never" | "immediately" | "min_2" | "min_5" | "min_10" | "min_15" | "hour_1" | "sec_15"
 export type OverlayPosition = "top" | "bottom"
 /**

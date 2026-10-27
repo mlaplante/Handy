@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+  <!--
+    App Sandbox (com.apple.security.app-sandbox) is NOT enabled in this file, so
+    com.apple.security.personal-information.speech-recognition is intentionally omitted here:
+    it is inert without the sandbox and could complicate ad-hoc signing for non-MAS builds.
+    If App Sandbox is ever enabled for a MAS/release build, add
+    com.apple.security.personal-information.speech-recognition for on-device Apple Speech
+    (SpeechAnalyzer) access. See docs/superpowers/plans/2026-07-13-apple-speechanalyzer-backend.md,
+    Task 8 / "Task 0 — FULLY CONFIRMED" Authorization note.
+  -->
   <dict>
     <key>com.apple.security.device.microphone</key>
     <true/>

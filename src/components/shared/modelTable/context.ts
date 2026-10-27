@@ -3,7 +3,7 @@ import type { CatalogModel } from "@handy-computer/models";
 import type { Grading } from "@/lib/models/grading";
 
 /** Curated (onboarding offers it), catalog (untested), custom or legacy. */
-export type ModelKind = "curated" | "catalog" | "custom" | "legacy";
+export type ModelKind = "curated" | "catalog" | "custom" | "legacy" | "system";
 
 /** A model as the table shows it, whichever page's list it came from. */
 export interface TableModel {
